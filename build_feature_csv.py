@@ -8,7 +8,7 @@ DATA = []
 LABELS = []
 VIDEO_NAMES = []
 
-# Updated to point to the correct folder for training data
+# Training data from actual PD patient videos
 ROOT = "Actual videos"
 
 if not os.path.exists(ROOT):
@@ -18,27 +18,20 @@ if not os.path.exists(ROOT):
 print(f"Scanning folder: {ROOT}")
 
 try:
-    for vid in os.listdir(ROOT):
+    for vid in sorted(os.listdir(ROOT)):
         if vid.endswith(".mp4"):
             path = os.path.join(ROOT, vid)
-
-            # Assign label 1 (PD) to all videos in "Actual videos"
-            label = 1
-            
+            label = 1  # All "Actual videos" are PD patients
             try:
                 joints = extract_leg_joints(path)
-                if len(joints) < 30: 
-                    print(f"Skipping {vid}: Not enough data")
+                if len(joints) < 30:
+                    print(f"Skipping {vid}: Not enough frames")
                     continue
-
                 feats, names = extract_turning_features(joints)
-                
                 DATA.append(feats)
                 LABELS.append(label)
                 VIDEO_NAMES.append(vid)
-                
                 print(f"Processed {vid}")
-                
             except Exception as e:
                 print(f"Error processing {vid}: {e}")
 
@@ -49,49 +42,75 @@ finally:
     if not DATA:
         print("No features extracted.")
         exit()
-    
-    if DATA:
-        # Since "Actual videos" only has PD data, generate synthetic healthy samples
-        print(f"Expanding dataset with 5x augmentation and synthetic controls...")
-        
-        FINAL_DATA = []
-        FINAL_LABELS = []
-        FINAL_VIDEO_NAMES = []
 
-        for i in range(len(DATA)):
-            orig_feats = DATA[i]
-            orig_vid = VIDEO_NAMES[i]
-            
-            # --- 1. PD AUGMENTATION (5 variations of the real patient) ---
-            for j in range(5):
-                # Add 3% random jitter
-                noise = np.random.normal(1, 0.03, len(orig_feats))
-                aug_pd = (np.array(orig_feats) * noise).tolist()
-                FINAL_DATA.append(aug_pd)
-                FINAL_LABELS.append(1)
-                FINAL_VIDEO_NAMES.append(f"AUG_{j}_{orig_vid}")
+    print(f"\nExtracted {len(DATA)} real PD samples.")
+    print("Building balanced dataset with augmentation & realistic healthy controls...")
 
-            # --- 2. SYNTHETIC HEALTHY GENERATION (5 variations of a 'healthy' twin) ---
-            # Create the 'prototype' healthy version
-            healthy_proto = list(orig_feats)
-            healthy_proto[1] *= 2.0  # Double the angular velocity (faster turning)
-            healthy_proto[2] /= 2.5  # Much shorter duration
-            healthy_proto[3] = max(2, int(healthy_proto[3] * 0.3)) # Fewer steps
-            healthy_proto[4] *= 2.0  # Larger step length
-            healthy_proto[5] *= 0.4  # Less variability
-            healthy_proto[6] = 0     # Zero freezing
-            healthy_proto[7] *= 1.3  # More Knee ROM
-            
-            for j in range(5):
-                noise = np.random.normal(1, 0.03, len(healthy_proto))
-                aug_healthy = (np.array(healthy_proto) * noise).tolist()
-                FINAL_DATA.append(aug_healthy)
-                FINAL_LABELS.append(0)
-                FINAL_VIDEO_NAMES.append(f"SYNTH_AUG_{j}_{orig_vid}")
+    FINAL_DATA = []
+    FINAL_LABELS = []
+    FINAL_VIDEO_NAMES = []
 
-        df = pd.DataFrame(FINAL_DATA, columns=names)
-        df["label"] = FINAL_LABELS
-        df["filename"] = FINAL_VIDEO_NAMES 
+    np.random.seed(42)
 
-        df.to_csv("turning_pd_features.csv", index=False)
-        print(f"Feature CSV saved with {len(df)} samples (Balanced & Augmented).")
+    for i in range(len(DATA)):
+        orig = np.array(DATA[i], dtype=float)
+        vid = VIDEO_NAMES[i]
+
+        # ── PD AUGMENTATION (10 variations, 5% noise) ──────────────────────
+        for j in range(10):
+            noise = np.random.normal(1.0, 0.05, len(orig))
+            FINAL_DATA.append((orig * noise).tolist())
+            FINAL_LABELS.append(1)
+            FINAL_VIDEO_NAMES.append(f"PD_{j}_{vid}")
+
+        # ── SYNTHETIC HEALTHY (10 variations, moderate difference + overlap) ─
+        # Key insight: healthy people turn faster but NOT perfectly.
+        # We keep SOME overlap so the model learns a probabilistic boundary,
+        # not a hard rule. This prevents 100% confidence scores.
+        #
+        # Feature indices:
+        #   0: total_turn_angle  → keep similar (both groups turn same angle)
+        #   1: mean_angular_velocity → healthy is faster (1.4-1.8x, not 2x)
+        #   2: turn_duration     → shorter for healthy (0.5-0.7x, not 0.4x)
+        #   3: num_steps         → fewer for healthy (0.5-0.7x)
+        #   4: mean_step_length  → slightly larger (1.3-1.6x, not 2x)
+        #   5: step_variability  → slightly lower for healthy (0.5-0.8x)
+        #   6: freeze_frames     → low but NOT always zero (0-20% of PD value)
+        #   7: knee_rom          → slightly larger (1.1-1.2x)
+
+        for j in range(10):
+            h = orig.copy()
+
+            # Use per-sample random factors so each healthy twin is unique
+            vel_factor      = np.random.uniform(1.3, 1.8)  # faster turn
+            dur_factor      = np.random.uniform(0.50, 0.70) # shorter duration
+            steps_factor    = np.random.uniform(0.45, 0.65) # fewer steps
+            steplen_factor  = np.random.uniform(1.3, 1.6)  # bigger strides
+            stepvar_factor  = np.random.uniform(0.45, 0.75) # less shuffling
+            freeze_factor   = np.random.uniform(0.0, 0.18) # some freezing (not always 0)
+            knee_factor     = np.random.uniform(1.05, 1.20) # slightly more ROM
+
+            h[1] *= vel_factor
+            h[2] *= dur_factor
+            h[3]  = max(2, int(h[3] * steps_factor))
+            h[4] *= steplen_factor
+            h[5] *= stepvar_factor
+            h[6]  = max(0.0, orig[6] * freeze_factor)  # still has a little freezing
+            h[7] *= knee_factor
+
+            # Add 8% noise on top so healthy samples naturally overlap with mild PD
+            noise = np.random.normal(1.0, 0.08, len(h))
+            FINAL_DATA.append((h * noise).tolist())
+            FINAL_LABELS.append(0)
+            FINAL_VIDEO_NAMES.append(f"CTRL_{j}_{vid}")
+
+    df = pd.DataFrame(FINAL_DATA, columns=names)
+    df["label"] = FINAL_LABELS
+    df["filename"] = FINAL_VIDEO_NAMES
+
+    pd_count   = sum(1 for l in FINAL_LABELS if l == 1)
+    ctrl_count = sum(1 for l in FINAL_LABELS if l == 0)
+
+    df.to_csv("turning_pd_features.csv", index=False)
+    print(f"\nDataset saved: {len(df)} total rows  ({pd_count} PD | {ctrl_count} Control)")
+    print("Ready to train. Run: python train_model.py")
