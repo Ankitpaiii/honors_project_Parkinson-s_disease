@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+
+# Data and Models
+*.mp4
+*.zip
+Actual videos/
+Videos/
+
+# Model weighing (Optional, but usually pkl is pushed if it's the final artifact)
+# If the user wants to keep the repo clean of large binaries:
+# model.pkl
+
+# System
+.DS_Store
+Thumbs.db
