@@ -1,16 +1,33 @@
 import os
+# Suppress annoying MediaPipe/TF internal warnings
+os.environ['GLOG_minloglevel'] = '3' 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+import sys
 import numpy as np
 import joblib
 import pandas as pd
+
+# Import shared modules from the project root
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from pose_extract import extract_leg_joints
 from turning_features import extract_turning_features
 
-VIDEO_FOLDER = "Videos"
+# Look at the root Videos folder
+VIDEO_FOLDER = "../Videos"
 
-model = joblib.load("model.pkl")
-print("Model loaded successfully\n")
+if not os.path.exists(VIDEO_FOLDER):
+    print(f"Error: {VIDEO_FOLDER} not found.")
+    exit(1)
+
+try:
+    model = joblib.load("model.pkl")
+    print("Model loaded successfully\n")
+except FileNotFoundError:
+    print("Error: model.pkl not found. Please run train_model.py first.")
+    exit(1)
+
 print("=" * 55)
-print("    PARKINSONIAN TURNING PATTERN ANALYSIS")
+print("    PARKINSONIAN TURNING PATTERN ANALYSIS (ALL 8 FEATURES)")
 print("=" * 55 + "\n")
 
 for video in sorted(os.listdir(VIDEO_FOLDER)):
@@ -28,13 +45,8 @@ for video in sorted(os.listdir(VIDEO_FOLDER)):
     X_base = np.array(features, dtype=float)
 
     # ── MONTE CARLO INFERENCE ────────────────────────────────────────────
-    # Clinical measurements always carry natural sensor noise.
-    # We run 200 trials with realistic pose-estimation jitter (±6%)
-    # and average the result. Because the training data has OVERLAP between
-    # classes, the ensemble trees genuinely disagree on borderline samples,
-    # producing varied, clinically meaningful scores (e.g. 0.93, 0.97).
     N_TRIALS     = 200
-    JITTER_STD   = 0.06   # 6% — mirrors real pose-estimation uncertainty
+    JITTER_STD   = 0.06
     probs = []
 
     for _ in range(N_TRIALS):
@@ -46,7 +58,6 @@ for video in sorted(os.listdir(VIDEO_FOLDER)):
     prob = float(np.mean(probs))
     pred = 1 if prob > 0.5 else 0
 
-    # ── Confidence band ──────────────────────────────────────────────────
     std_score  = float(np.std(probs))
     low, high  = prob - 1.96 * std_score, prob + 1.96 * std_score
 

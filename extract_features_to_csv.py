@@ -1,4 +1,8 @@
 import os
+# Suppress annoying MediaPipe/TF internal warnings
+os.environ['GLOG_minloglevel'] = '3' 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+
 import pandas as pd
 import numpy as np
 from pose_extract import extract_leg_joints
@@ -18,25 +22,29 @@ if not os.path.exists(ROOT):
 print(f"Scanning folder: {ROOT}")
 
 try:
-    for vid in sorted(os.listdir(ROOT)):
-        if vid.endswith(".mp4"):
-            path = os.path.join(ROOT, vid)
-            label = 1  # All "Actual videos" are PD patients
-            try:
-                joints = extract_leg_joints(path)
-                if len(joints) < 30:
-                    print(f"Skipping {vid}: Not enough frames")
-                    continue
-                feats, names = extract_turning_features(joints)
-                DATA.append(feats)
-                LABELS.append(label)
-                VIDEO_NAMES.append(vid)
-                print(f"Processed {vid}")
-            except Exception as e:
-                print(f"Error processing {vid}: {e}")
+    all_vids = [v for v in sorted(os.listdir(ROOT)) if v.endswith(".mp4")]
+    total_vids = len(all_vids)
+    print(f"Found {total_vids} video(s) to process.\n")
+
+    for idx, vid in enumerate(all_vids, 1):
+        path  = os.path.join(ROOT, vid)
+        label = 1  # All "Actual videos" are PD patients
+        print(f"  [{idx}/{total_vids}] Processing: {vid} ...", end=" ", flush=True)
+        try:
+            joints = extract_leg_joints(path)
+            if len(joints) < 30:
+                print(f"SKIPPED (only {len(joints)} frames)")
+                continue
+            feats, names = extract_turning_features(joints)
+            DATA.append(feats)
+            LABELS.append(label)
+            VIDEO_NAMES.append(vid)
+            print("OK")
+        except Exception as e:
+            print(f"ERROR: {e}")
 
 except KeyboardInterrupt:
-    print("\nProcessing interrupted.")
+    print("\nProcessing interrupted by user.")
 
 finally:
     if not DATA:
